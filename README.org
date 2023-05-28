@@ -1,0 +1,7 @@
+#+Title:Kubernetes Development Cluster
+#+Author:Steve Kallestad
+
+This repository contains scripts to build a local kubernetes cluster that can
+be used to experiment with Kubernetes.
+
+
