@@ -4,4 +4,10 @@
 This repository contains scripts to build a local kubernetes cluster that can
 be used to experiment with Kubernetes.
 
+* Build a cluster
+This cluster is going to be used locally, so the tool that will be used is
+[[https://kind.sigs.k8s.io][kind]].  Kind is a tool for running local Kubernetes clusters using Docker
+container "nodes".  
 
+You can create a cluster easily with the simple command =kind create cluster=,
+but you can also leverage a YAML config file to set appropriate options.

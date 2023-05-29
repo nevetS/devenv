@@ -1,0 +1,5 @@
+- name: kube-exp dns
+  lineinfile:
+    dest: /etc/hosts
+    line: '127.0.0.2 tatooine.kube k8s.tatooine.kube'
+    state: present

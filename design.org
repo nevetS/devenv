@@ -1,0 +1,244 @@
+#+Title:Design and Build Notes
+#+Author:Steve Kallestad
+
+* Intro
+This document contains build notes and some general design information for this
+kubernetes environment.
+* Cluster and Hostname
+I don't like to refer to clusters or hosts by names like development-server or
+experiment, and certainly not localhost.  It gets confusing and multiple
+instances becomes harder to track down.  Further, things like password
+management become a problem if you don't have an FQDN.
+
+The domain for this cluster (and all clusters that I spin up or down on my
+local machine will be =.kube=
+
+For hostnames, I'm going to planet names from Star Wars.  We have a good list
+to choose from, and that means room for growth.  This cluster will be
+=Tatooine= since right now it's an empty desert.  I can use other planets for
+other clusters, or potentially for nodes within this cluster.
+
+** Potential hostnames:
+*** Coruscant
+*** DONE Tatooine
+*** Kashyyk
+*** Hoth
+*** Kamino
+*** Alderaan
+*** Naboo
+*** Dagobah
+*** Bespin
+*** Geonosis
+*** Yavin
+*** Mustafar
+*** Corellia
+*** Jakku
+*** Polis Massa
+*** Nal Hutta
+*** Dantooine
+*** Mandalore
+*** Mon Calamari
+*** Ryloth
+- 
+* DNSMasq
+DNSMasq is a caching DNS server.  It also does DHCP and hte DHCPsubsystem
+supports DHCPv4, DHCPv6, BOOTP, and PXE.  While not /required/ for this
+environment, I'd like to have it in place.
+
+The following instructions are for ubuntu 22 (jellyfish)
+
+** Installation
+Ubuntu comes with systemd-resolve that needs to be disabled since it binds to
+port 53 which will conflict with dnsmasq.
+
+This could probably be done using a single ansible script, but that may not
+have removed the resolv.conf link
+
+#+begin_src shell :tangle ./scripts/disable-systemd-resolved.sh
+  #!/bin/bash
+  #================================================================
+  # HEADER
+  #================================================================
+  # SYNOPSIS
+  #    disable-systemd-resolved.sh
+  #
+  # DESCRIPTION
+  #    Disables systemd-resolved in preparation for installing dnsmasq on ubuntu.
+  #
+  #    Based on the article at https://computingforgeeks.com/install-and-configure-dnsmasq-on-ubuntu/
+  #
+  # EXAMPLES
+  #    sudo disable-systemd-resolved.sh
+  #
+  #================================================================
+  # IMPLEMENTATION
+  #    version         disable-systemd-resolved.sh 0.0.1
+  #    author          Steve Kallestad
+  #    license         CC-BY-SA Creative Commons License
+  #
+  #================================================================
+  #  HISTORY
+  #     2023/05/28 : Script creation
+  # 
+  #================================================================
+  # END_OF_HEADER
+  #================================================================
+
+  # First disable, then stop systemd-resolved
+  systemctl disable systemd-resolved
+  systemctl stop systemd-resolved
+
+  # unlink /etc/resolv.conf (systemd-resolved has that file linked to
+  #  /run/systemd/resolve/stub-resolv.conf
+  unlink /etc/resolv.conf
+
+  # 8.8.8.8 is the google dns server
+  echo nameserver 8.8.8.8 | sudo tee /etc/resolv.conf
+#+end_src
+
+#+begin_src shell :tangle ./scripts/install-dnsmasq.sh
+  #!/bin/bash
+  #================================================================
+  # HEADER
+  #================================================================
+  # SYNOPSIS
+  #    sudo install-dnsmasq.sh
+  #
+  # DESCRIPTION
+  #    Installs dnsmasq on ubuntu.
+  #
+  #    Based on the article at https://computingforgeeks.com/install-and-configure-dnsmasq-on-ubuntu/
+  #
+  #    !! This script must be run either as root, or under sudo
+  #
+  # EXAMPLES
+  #    sudo install-dnsmasq.sh
+  #
+  #================================================================
+  # IMPLEMENTATION
+  #    version         disable-systemd-resolved.sh 0.0.1
+  #    author          Steve Kallestad
+  #    license         CC-BY-SA Creative Commons License
+  #
+  #================================================================
+  #  HISTORY
+  #     2023/05/28 : Script creation
+  # 
+  #================================================================
+  # END_OF_HEADER
+  #================================================================
+
+  apt-get update
+  apt-get install dnsmasq
+#+end_src
+** Add host entry for cluster
+The reason for installing DNSMasq, partially is to be able to create hostnames
+for the services that we run on it.  We could simply echo hostnames to the
+/etc/hosts file, but that would mean that multiple runs of the script would
+result in multiple host entries.  We don't want to do these edits manually, so
+the solution is to create an ansible script that will maintain the hosts file.
+
+#+begin_src yaml :tangle scripts/ansible/playbooks/hosts.yaml
+  - name: kube-exp dns
+    lineinfile:
+      dest: /etc/hosts
+      line: '127.0.0.2 tatooine.kube k8s.tatooine.kube'
+      state: present
+#+end_src
+
+I don't want to specify localhost or a group name in the playbook, for future
+considerations, so instead I will create a shell script that will run the
+playbook against the localhost.
+
+#+begin_src shell :tangle scripts/sync-repo-hosts
+  #!/bin/bash
+  #================================================================
+  # HEADER
+  #================================================================
+  # SYNOPSIS
+  #    sync-repo-hosts.sh
+  #
+  # DESCRIPTION
+  #    Adds hostnames from this project into the local /etc/hosts file
+  #
+  #
+  # EXAMPLES
+  #    sync-repo-hosts.sh
+  #
+  #================================================================
+  # IMPLEMENTATION
+  #    version         sync-repo-hosts 0.0.1
+  #    author          Steve Kallestad
+  #    license         CC-BY-SA Creative Commons License
+  #
+  #================================================================
+  #  HISTORY
+  #     2023/05/28 : Script creation
+  # 
+  #================================================================
+  # END_OF_HEADER
+  #================================================================
+
+  ansible-playbook \
+      --connection=local \
+      --inventory 127.0.0.1, \
+      --limit 127.0.0.1 ansible/playbooks/hosts.yaml -i ansible_hosts
+#+end_src
+
+*** TODO validate that the playbook is available
+*** TODO validate user permissions
+* Kind Cluster
+[[https://kind.sigs.k8s.io][Kind]] is a kubernetes testing utility that is used to create clusters on your
+local machine.
+
+** Cluster Config
+The following cluster config file spells out a single-node cluster that is
+ready for an ingress.  It will be listening on 127.0.0.2
+
+#+begin_src yaml :tangle kind/tatooine.yaml
+  ---
+  kind: Cluster
+  apiVersion: kind.x-k8s.io/v1alpha4
+  name: experiment
+  nodes:
+    - role: control-plane
+      listenAddress: 127.0.0.2
+      protocol: TCP
+      kubeadmConfigPatches:
+	# required config to enable ingress on kind clusters
+	- |
+	  kind: InitConfiguration
+	  nodeRegistration:
+	    kubeleteExtraArgs:
+	      node-labels: "ingress-ready=true"
+      extraMounts:
+	# expose a local path as a mount
+	- hostPath: ~/kind/tatooine
+	  containerPath: /opt/visible
+      extraPortMappings:
+	# forward ports 80 and 443 on 127.0.0.2 to the kubernetes cluster
+	#  for the ingress
+	- containerPort: 80
+	  hostPort: 80
+	  listenAddress: 127.0.0.2
+	- containerPort: 443
+	  hostPort: 443
+	  listenAddress: 127.0.0.2
+#+end_src
+
+*** TODO item - pin the kubernetes version in this config
+
+** Nginx Ingress
+
+Once the cluster is created, we can deploy an Nginx ingress.  From the [[https://kind.sigs.k8s.io/docs/user/ingress/][kind
+documentation]] this manifest contains kind specific patches to forward the
+hostPorts ot the ingress controller, set taint tolerations, and schedule it to
+the custom labelled node we set up in the cluster config file above.
+
+#+begin_src shell
+  #!/bin/bash
+
+  # I generally do not like to deploy things in this manner.  I don't control the repository
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+#+end_src
+
