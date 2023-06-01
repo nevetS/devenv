@@ -1,5 +1,31 @@
-- name: kube-exp dns
-  lineinfile:
-    dest: /etc/hosts
-    line: '127.0.0.2 tatooine.kube k8s.tatooine.kube'
-    state: present
+---
+- name: Ensure host file entries for DNS
+  hosts: 127.0.0.1
+  tasks:
+    - name: "ensure tatooine"
+      become: yes
+      become_user: root
+
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.2 tatooine.kube k8s.tatooine.kube"
+        backup: yes
+        state: present
+    - name: "ensure prometheus.tatooine.kube"
+      become: yes
+      become_user: root
+
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.2 prometheus.tatooine.kube"
+        backup: yes
+        state: present
+    - name: "ensure grafana.tatooine.kube"
+      become: yes
+      become_user: root
+
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.2 grafana.tatooine.kube"
+        backup: yes
+        state: present

@@ -54,7 +54,7 @@ port 53 which will conflict with dnsmasq.
 This could probably be done using a single ansible script, but that may not
 have removed the resolv.conf link
 
-#+begin_src shell :tangle ./scripts/disable-systemd-resolved.sh
+#+begin_src shell :tangle ./scripts/disable-systemd-resolved.sh :tangle-mode (identity #o775)
   #!/bin/bash
   #================================================================
   # HEADER
@@ -96,7 +96,7 @@ have removed the resolv.conf link
   echo nameserver 8.8.8.8 | sudo tee /etc/resolv.conf
 #+end_src
 
-#+begin_src shell :tangle ./scripts/install-dnsmasq.sh
+#+begin_src shell :tangle ./scripts/install-dnsmasq.sh :tangle-mode (identity #o775)
   #!/bin/bash
   #================================================================
   # HEADER
@@ -139,18 +139,44 @@ result in multiple host entries.  We don't want to do these edits manually, so
 the solution is to create an ansible script that will maintain the hosts file.
 
 #+begin_src yaml :tangle scripts/ansible/playbooks/hosts.yaml
-  - name: kube-exp dns
-    lineinfile:
-      dest: /etc/hosts
-      line: '127.0.0.2 tatooine.kube k8s.tatooine.kube'
-      state: present
+---
+- name: Ensure host file entries for DNS
+  hosts: 127.0.0.1
+  tasks:
+    - name: "ensure tatooine"
+      become: yes
+      become_user: root
+
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.2 tatooine.kube k8s.tatooine.kube"
+        backup: yes
+        state: present
+    - name: "ensure prometheus.tatooine.kube"
+      become: yes
+      become_user: root
+
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.2 prometheus.tatooine.kube"
+        backup: yes
+        state: present
+    - name: "ensure grafana.tatooine.kube"
+      become: yes
+      become_user: root
+
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.2 grafana.tatooine.kube"
+        backup: yes
+        state: present
 #+end_src
 
 I don't want to specify localhost or a group name in the playbook, for future
 considerations, so instead I will create a shell script that will run the
 playbook against the localhost.
 
-#+begin_src shell :tangle scripts/sync-repo-hosts
+#+begin_src shell :tangle scripts/sync-repo-hosts.sh :tangle-mode (identity #o775)
   #!/bin/bash
   #================================================================
   # HEADER
@@ -182,7 +208,8 @@ playbook against the localhost.
   ansible-playbook \
       --connection=local \
       --inventory 127.0.0.1, \
-      --limit 127.0.0.1 ansible/playbooks/hosts.yaml -i ansible_hosts
+      --ask-become-pass \
+      --limit 127.0.0.1 scripts/ansible/playbooks/hosts.yaml -i ansible_hosts
 #+end_src
 
 *** TODO validate that the playbook is available
@@ -196,37 +223,42 @@ The following cluster config file spells out a single-node cluster that is
 ready for an ingress.  It will be listening on 127.0.0.2
 
 #+begin_src yaml :tangle kind/tatooine.yaml
-  ---
-  kind: Cluster
-  apiVersion: kind.x-k8s.io/v1alpha4
-  name: experiment
-  nodes:
-    - role: control-plane
-      listenAddress: 127.0.0.2
-      protocol: TCP
-      kubeadmConfigPatches:
-	# required config to enable ingress on kind clusters
-	- |
-	  kind: InitConfiguration
-	  nodeRegistration:
-	    kubeleteExtraArgs:
-	      node-labels: "ingress-ready=true"
-      extraMounts:
-	# expose a local path as a mount
-	- hostPath: ~/kind/tatooine
-	  containerPath: /opt/visible
-      extraPortMappings:
-	# forward ports 80 and 443 on 127.0.0.2 to the kubernetes cluster
-	#  for the ingress
-	- containerPort: 80
-	  hostPort: 80
-	  listenAddress: 127.0.0.2
-	- containerPort: 443
-	  hostPort: 443
-	  listenAddress: 127.0.0.2
+---
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: tatooine
+networking:
+    apiServerAddress: 127.0.0.2
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.24.13@sha256:cea86276e698af043af20143f4bf0509e730ec34ed3b7fa790cc0bea091bc5dd
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraMounts:
+      # expose a local path as a mount
+      - hostPath: ~/kind/tatooine
+        containerPath: /opt/visible
+    extraPortMappings:
+      # forward ports 80 and 443 on 127.0.0.2 to the kubernetes cluster
+      #  for the ingress
+      - containerPort: 80
+        hostPort: 80
+        listenAddress: 127.0.0.2
+      - containerPort: 443
+        hostPort: 443
+        listenAddress: 127.0.0.2
 #+end_src
 
-*** TODO item - pin the kubernetes version in this config
+** create cluster
+Create the cluster with the following script
+#+begin_src shell :tangle scripts/create-cluster.sh :tangle-mode (identity #o775)
+#!/bin/bash
+kind create cluster --config kind/tatooine.yaml
+#+end_src
 
 ** Nginx Ingress
 
@@ -242,3 +274,354 @@ the custom labelled node we set up in the cluster config file above.
   kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
 #+end_src
 
+** cert-manager
+cert-manager adds certificates and certificate issuers as resource types in
+Kubernetes clusters, and simplifies the process of obtaining, renewing and
+using those certificates.
+
+It can issue certificates from a variety of supported sources, including Let's
+Encrypt, HashiCorp Vault, and Venafi as well as private PKI.
+
+It will ensure certificates are valid and up to date, and attempt to renew
+certificates at a configured time before expiry.
+
+*** installation
+Cert manager can be installed with helm.  The helm chart for cert-manager is
+well maintained and is treated as a first class installation method.
+
+A complete set of installation documentation with helm can be found at
+https://cert-manager.io/docs/installation/helm/
+
+**** cert-manager values file
+Values files are used to configure helm installations.
+
+Potential values are listed here:
+https://artifacthub.io/packages/helm/cert-manager/cert-manager
+
+This installation is going to use all of the default values, so one will not be
+created for now.
+**** cert-manager CRDs
+You can optionally install CRDs using a helm values flag or you can install
+them manually.  I'm opting to install them manually.
+
+If you install the CRDs via the helm chart, all CRD resources will be deleted
+if and when you ever uninstall that helm chart.
+
+#+begin_src shell :tangle scripts/install-cert-manager-crds.sh :tangle-mode (identity #o775)
+  #!/bin/bash
+  kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.1/cert-manager.crds.yaml
+#+end_src
+
+**** install using helm
+#+begin_src shell :tangle scripts/install-cert-manager.sh :tangle-mode (identity #o775)
+#!/bin/bash
+helm install \
+  cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version v1.12.0 
+#+end_src
+**** Create a Private CA
+This is going to be an expirmental/development environment that isn't exposed
+to the internet regularly, so we're going to need a Private Certificate
+Authority to generate TLS certificates for our endpoints.
+
+You can also do self-signed certificates, but self-signed certificates have the
+problem that they need to be independently verified.
+
+***** Bootstrap with a SelfSigned issuer
+Based on
+https://cert-manager.io/docs/configuration/selfsigned/#bootstrapping-ca-issuers
+
+This YAML will create a SelfSigned issuer, issue a root certificate and use
+that root as the CA issuer:
+
+#+begin_src yaml :tangle kube/cert-manager/bootstrap-ca.yaml
+---
+# create a self-signed ClusterIssuer
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: tatooine-selfsigned-issuer
+spec:
+  selfSigned: {}
+    # we'll skip the Certificate Revocation List for now
+    # crlDistributionPoints:
+    #   - "http://crl.tatooine.kube"    
+---
+# generate the root-secret certificate required for creating a CA
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tatooine-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: tatooine-ca
+  secretName: root-secret
+  # subject is required per X.509 RFC 5280, section 4.1.2.4 https://tools.ietf.org/html/rfc5280#section-4.1.2.4
+  subject:
+    organizations:
+      - tatooine.kube
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: tatooine-selfsigned-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# create the CA as a ClusterIssuer
+#  Issuers can create certificates in a namespace,
+#  ClusterIssuers can create certs in any namespace
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: tatooine-ca-issuer
+spec:
+  ca:
+    secretName: root-secret
+#+end_src
+** Prometheus
+Prometheus is a systems and service monitoring system.  It collects metrics at
+given intervals, evaluates rule expressions, displays the results, and can
+trigger alerts if a condition is observed to be true.
+
+For this deployment of Prometheus, we will use the [[https://github.com/prometheus-operator/kube-prometheus][kube-prometheus]] library.
+This includes the following components:
+
+- [[https://github.com/prometheus-operator/prometheus-operator][Prometheus Operator]]
+- Highly Available [[https://prometheus.io/][Prometheus]]
+- Highly available [[https://github.com/prometheus/alertmanager][Alertmanager]]
+- [[https://github.com/prometheus/node_exporter][Prometheus node-exporter]]
+- [[https://github.com/kubernetes-sigs/prometheus-adapter][Prjomtheus Adapter for Kubernetes Metrics APIs]]
+- [[https://github.com/kubernetes/kube-state-metrics][kube-state-metrics]]
+- [[https://grafana.com/][Grafana]]
+
+  Customizing this deployment is a little different.  https://github.com/prometheus-operator/kube-prometheus/blob/main/docs/customizing.md
+*** NOWORKIE Install using shell
+#+begin_src shell :tangle scripts/install-prometheus.sh :tangle-mode (identity #o775)
+#!/bin/bash
+#==============================================================================
+# HEADER
+#==============================================================================
+# SYNOPSIS
+#    install-prometheus.sh /path/to/kube-prometheus-source-repo
+#
+# DESCRIPTION
+#    Installs kube-prometheus stack
+#
+#
+# EXAMPLES
+#    ./install-prometheus.sh ~/repos/kube-prometheus
+#
+#==============================================================================
+# IMPLEMENTATION
+#    version         install-prometheus.sh /path/to/kube-prometheus-source-repo 0.0.1
+#    author          Steve Kallestad
+#    license         CC-BY-SA Creative Commons License
+#
+#==============================================================================
+#  HISTORY
+#     2023/05/31 : Script creation
+# 
+#==============================================================================
+# END_OF_HEADER
+#==============================================================================
+
+$KUBE_PROM_SRC_PATH=$1
+# Create the namespace and CRDs, and then wait for them to be available before creating the remaining resources
+cd $KUBE_PROM_SRC_PATH
+kubectl apply --server-side -f manifests/setup
+kubectl wait \
+	--for condition=Established \
+	--all CustomResourceDefinition \
+	--namespace=monitoring
+kubectl apply -f manifests/
+cd -
+#+end_src
+
+*** Install using helm
+Prometheus has a community built and maintained chart.  Documentation forthis
+chart is at
+https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus
+
+**** Add helm repository
+#+begin_src shell :tangle scripts/install-prom-repo.sh :tangle-mode (identity #o775)
+#!/bin/sh
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+#+end_src
+**** Monitoring Namespace
+#+begin_src yaml :tangle kube/prometheus/monitoring-namespace.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+#+end_src
+**** Create server TLS certificate
+We need to create a TLS certificate for the Prometheus UI
+
+#+begin_src yaml :tangle kube/prometheus/certificate.yaml
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  commonName: prometheus.tatooine.kube
+  secretName: prometheus-server-tls
+  dnsNames:
+    - prometheus.tatooine.kube
+  duration: 2160h
+  subject:
+    organizations:
+    # company name
+    - Personal Environment
+    organizationalUnits:
+    # department
+      - Development
+    countries:
+      - USA
+    # cities
+    localities: []
+    # states
+    provinces:
+          - CA
+  issuerRef:
+      name: tatooine-ca-issuer
+      kind: ClusterIssuer
+#+end_src
+**** setup values file
+The following updates will be made in the =kube/prometheus/values.yaml file
+#+begin_src yaml :tangle no
+server:
+  ingress:
+    ## If true, Prometheus server Ingress will be created
+    ##
+    enabled: true
+
+    ## Prometheus server Ingress hostnames
+    ## Must be provided if Ingress is enabled
+    ##
+    hosts:
+      - prometheus.tatooine.kube
+    ## Prometheus server Ingress TLS configuration
+    ## Secrets must be manually created in the namespace
+    ##
+    tls:
+      - secretName: prometheus-server-tls
+        hosts:
+          - prometheus.tatooine.kube
+#+end_src
+**** helm install script
+#+begin_src shell :tangle scripts/install-prometheus.sh :tangle-mode (identity #o775)
+#!/bin/sh
+helm install \                                                                                                                                                           (kind-tatooine/ingress-nginx)
+  prometheus prometheus-community/prometheus \
+  --namespace monitoring \
+  --version 22.6.2 \
+-f kube/prometheus/values.yaml
+#+end_src
+** Grafana
+*** install using helm
+**** add helm repository
+#+begin_src shell :tangle scripts/install-grafana-repo.sh :tangle-mode (identity #o775)
+#!/bin/sh
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+#+end_src
+**** setup values file
+The following updates will be made in the =kube/prometheus/values.yaml file
+#+begin_src yaml :tangle no
+server:
+  ingress:
+    enabled: true
+
+    hosts:
+      - grafana.tatooine.kube
+
+    tls:
+      - secretName: prometheus-server-tls
+        hosts:
+          - prometheus.tatooine.kube
+#+end_src
+
+**** create TLS certificate
+#+begin_src yaml :tangle kube/grafana/certificate.yaml
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  commonName: grafana.tatooine.kube
+  secretName: grafana-tls
+  dnsNames:
+    - grafana.tatooine.kube
+  duration: 2160h
+  subject:
+    organizations:
+    # company name
+    - Personal Environment
+    organizationalUnits:
+    # department
+      - Development
+    countries:
+      - USA
+    # cities
+    localities: []
+    # states
+    provinces:
+          - CA
+  issuerRef:
+      name: tatooine-ca-issuer
+      kind: ClusterIssuer
+#+end_src
+
+
+**** helm install script
+#+begin_src shell :tangle scripts/install-grafana.sh :tangle-mode (identity #o775)
+#!/bin/bash
+helm install \
+     grafana grafana/grafana \
+     --namespace monitoring \
+     --version 6.56.6 \
+     -f kube/grafana/values.yaml
+#+end_src
+
+**** get admin password
+#+begin_src shell :tangle scripts/get-grafana-admin.sh :tangle-mode (identity #o775)
+#!/bin/bash
+kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode
+#+end_src
+* Overall installation
+#+begin_src shell tangle: no
+  # if ansible is not installed locally
+  python3 -m pip install --user ansible
+
+  # uninstall resolved and replace with dnsmasq
+  sudo scripts/disable-systemd-resolved.sh
+  sudo scripts/install-dnsmasq.sh
+
+  # build a cluster
+  scripts/createcluster.sh
+
+  # add the ngninx ingress controller
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+
+  # install cert-manager
+  scripts/install-cert-manager-crds.sh
+  scripts/install-cert-manager.sh
+  kubectl apply -f kube/cert-manager/bootstrap-ca.yaml
+#+end_src
+* Backing up work
+** Kubernetes
+** Cert-Manager
+** Prometheus
+** Grafana
+
+* Delete The Cluster

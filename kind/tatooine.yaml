@@ -1,28 +1,28 @@
 ---
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-name: experiment
+name: tatooine
+networking:
+    apiServerAddress: 127.0.0.2
 nodes:
   - role: control-plane
-    listenAddress: 127.0.0.2
-    protocol: TCP
+    image: kindest/node:v1.24.13@sha256:cea86276e698af043af20143f4bf0509e730ec34ed3b7fa790cc0bea091bc5dd
     kubeadmConfigPatches:
-      # required config to enable ingress on kind clusters
       - |
-	kind: InitConfiguration
-	nodeRegistration:
-	  kubeleteExtraArgs:
-	    node-labels: "ingress-ready=true"
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
     extraMounts:
       # expose a local path as a mount
       - hostPath: ~/kind/tatooine
-	containerPath: /opt/visible
+        containerPath: /opt/visible
     extraPortMappings:
       # forward ports 80 and 443 on 127.0.0.2 to the kubernetes cluster
       #  for the ingress
       - containerPort: 80
-	hostPort: 80
-	listenAddress: 127.0.0.2
+        hostPort: 80
+        listenAddress: 127.0.0.2
       - containerPort: 443
-	hostPort: 443
-	listenAddress: 127.0.0.2
+        hostPort: 443
+        listenAddress: 127.0.0.2

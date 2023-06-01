@@ -3,21 +3,18 @@
   # HEADER
   #================================================================
   # SYNOPSIS
-  #    sudo install-dnsmasq.sh
+  #    sync-repo-hosts.sh
   #
   # DESCRIPTION
-  #    Installs dnsmasq on ubuntu.
+  #    Adds hostnames from this project into the local /etc/hosts file
   #
-  #    Based on the article at https://computingforgeeks.com/install-and-configure-dnsmasq-on-ubuntu/
-  #
-  #    !! This script must be run either as root, or under sudo
   #
   # EXAMPLES
-  #    sudo install-dnsmasq.sh
+  #    sync-repo-hosts.sh
   #
   #================================================================
   # IMPLEMENTATION
-  #    version         disable-systemd-resolved.sh 0.0.1
+  #    version         sync-repo-hosts 0.0.1
   #    author          Steve Kallestad
   #    license         CC-BY-SA Creative Commons License
   #
@@ -29,5 +26,8 @@
   # END_OF_HEADER
   #================================================================
 
-  apt-get update
-  apt-get install dnsmasq
+  ansible-playbook \
+      --connection=local \
+      --inventory 127.0.0.1, \
+      --ask-become-pass \
+      --limit 127.0.0.1 scripts/ansible/playbooks/hosts.yaml -i ansible_hosts
